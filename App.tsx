@@ -60,8 +60,8 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { InventoryItem, HistoryRecord, IntakeRecord, PendingRecord, ViewState, DashboardPeriod } from './types';
 import { summarizeUsage } from './services/geminiService';
 
-// Target URL for Google Apps Script - Updated as requested
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxgy6tpUu9UOSq1uyyVj4iPFDAUuyEonKVrr9FcKEb-24RoSPJHvrGvM62Ney9nzzzy_A/exec";
+// Target URL for Google Apps Script - Updated to latest version
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyg5NeYHfgZRWjAv4Rac5NV5rC-poJAfeRaE0QVSPrzTY5tECgaiXhI17mE0peWBlPeDA/exec";
 const SHEET_LINK = "https://docs.google.com/spreadsheets/d/1wZwjqv-ocUKRIVbT0fW244lJAy6WEUvJj8WWtQqhhbs/edit?usp=sharing";
 
 const STAFF_LIST = [
@@ -154,6 +154,7 @@ const SimpleBarChart = ({ items }: { items: InventoryItem[] }) => {
 };
 
 const App: React.FC = () => {
+  const [sessionId] = useState(() => Math.random().toString(36).substr(2, 9).toUpperCase());
   const [view, setView] = useState<ViewState>('SCANNER');
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [history, setHistory] = useState<any[]>([]);
@@ -161,6 +162,7 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('wardstock_pending');
     return saved ? JSON.parse(saved) : [];
   });
+  const [adminPendingRecords, setAdminPendingRecords] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [dashboardSearch, setDashboardSearch] = useState('');
@@ -207,6 +209,10 @@ const App: React.FC = () => {
     if (diffDays === 1) return 'เมื่อวานนี้';
     return date.toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' });
   };
+
+  useEffect(() => {
+    localStorage.setItem('wardstock_pending', JSON.stringify(pendingRecords));
+  }, [pendingRecords]);
 
   const fetchInventory = async () => {
     setIsLoading(true);
@@ -270,6 +276,26 @@ const App: React.FC = () => {
     }
   };
 
+  const fetchAdminPending = async () => {
+    setIsLoading(true);
+    setFetchError(null);
+    try {
+      const response = await fetch(`${SCRIPT_URL}?action=getPending&t=${Date.now()}`, {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'no-store',
+        redirect: 'follow',
+      });
+      if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+      const data = await response.json();
+      setAdminPendingRecords(data || []);
+    } catch (error: any) {
+      setFetchError(`ไม่สามารถโหลดข้อมูล Pending ได้: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const sendDataToSheet = async (payload: any) => {
     return fetch(SCRIPT_URL, {
       method: 'POST',
@@ -322,6 +348,8 @@ const App: React.FC = () => {
   useEffect(() => {
     if (view === 'HISTORY') {
       fetchHistoryData();
+    } else if (view === 'ADMIN_PENDING') {
+      fetchAdminPending();
     } else if (view === 'DASHBOARD' || view === 'INVENTORY' || view === 'SCANNER') {
       fetchInventory();
     }
@@ -477,6 +505,19 @@ const App: React.FC = () => {
       staffName: staffName,
       timestamp: new Date().toLocaleString('th-TH'),
     };
+
+    // Real-time update to Admin Monitor
+    sendDataToSheet({
+      action: 'add_pending',
+      sessionId: sessionId,
+      id: newPending.itemId,
+      name: newPending.itemName,
+      amount: newPending.quantity,
+      unit: newPending.unit,
+      user: newPending.staffName,
+      bed: newPending.bedNumber
+    }).catch(err => console.error("Real-time sync failed", err));
+
     setPendingRecords(prev => [...prev, newPending]);
     setShowSuccess(true);
     setTargetId('');
@@ -492,6 +533,7 @@ const App: React.FC = () => {
       for (const p of pendingRecords) {
         await sendDataToSheet({
           action: 'disburse',
+          sessionId: sessionId,
           id: p.itemId,
           name: p.itemName,
           amount: p.quantity,
@@ -1535,6 +1577,91 @@ const App: React.FC = () => {
           </div>
         )}
 
+        {view === 'ADMIN_PENDING' && (
+          <div className="p-6 animate-in slide-in-from-right duration-300 print:hidden">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-4">
+                <button onClick={() => setView('DASHBOARD')} className="p-3 bg-white rounded-2xl shadow-sm border border-slate-100 text-slate-500"><ArrowLeft className="w-5 h-5"/></button>
+                <div>
+                  <h2 className="text-xl font-bold text-blue-900">Real-time Admin Observe</h2>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">รายการที่กำลังดำเนินการอยู่ในแต่ละ Session</p>
+                </div>
+              </div>
+              <button 
+                onClick={fetchAdminPending} 
+                className="p-3 bg-blue-50 text-blue-600 rounded-2xl active:rotate-180 transition-all duration-500"
+              >
+                {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshIcon className="w-5 h-5" />}
+              </button>
+            </div>
+
+            <div className="bg-white rounded-[32px] shadow-xl border border-slate-100 overflow-hidden">
+               <div className="overflow-x-auto">
+                 <table className="w-full text-left text-xs border-collapse">
+                   <thead>
+                       <tr className="bg-slate-50 border-b border-slate-100">
+                         <th className="px-5 py-4 font-black text-slate-400 uppercase tracking-widest">เวลา</th>
+                         <th className="px-5 py-4 font-black text-slate-400 uppercase tracking-widest">ID</th>
+                         <th className="px-5 py-4 font-black text-slate-400 uppercase tracking-widest">รายการ</th>
+                         <th className="px-5 py-4 font-black text-slate-400 uppercase tracking-widest">จำนวน</th>
+                         <th className="px-5 py-4 font-black text-slate-400 uppercase tracking-widest">หน่วย</th>
+                         <th className="px-5 py-4 font-black text-slate-400 uppercase tracking-widest">เลขเตียง</th>
+                         <th className="px-5 py-4 font-black text-slate-400 uppercase tracking-widest">ผู้เบิก</th>
+                         <th className="px-5 py-4 font-black text-slate-400 uppercase tracking-widest">Session</th>
+                       </tr>
+                     </thead>
+                     <tbody>
+                       {adminPendingRecords.length > 0 ? (
+                         adminPendingRecords.map((item, idx) => (
+                           <tr key={idx} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors group">
+                             <td className="px-5 py-4 text-slate-500 font-bold whitespace-nowrap">
+                               {item.Date ? new Date(item.Date).toLocaleString('th-TH') : '-'}
+                             </td>
+                             <td className="px-5 py-4 font-mono text-blue-600 font-bold uppercase">
+                               {item.ID || '-'}
+                             </td>
+                             <td className="px-5 py-4 font-black text-slate-800">
+                               {item.Name || '-'}
+                             </td>
+                             <td className="px-5 py-4 text-center">
+                               <span className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center font-black mx-auto">{item.Amount || '0'}</span>
+                             </td>
+                             <td className="px-5 py-4 text-slate-500 font-bold">
+                               {item.Unit || '-'}
+                             </td>
+                             <td className="px-5 py-4">
+                               <span className="text-[10px] font-bold text-orange-500 bg-orange-50 px-3 py-1 rounded-full whitespace-nowrap">BED: {item.Bed || '-'}</span>
+                             </td>
+                             <td className="px-5 py-4 font-black text-slate-700">
+                               {item.User || '-'}
+                             </td>
+                             <td className="px-5 py-4">
+                               <span className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full font-mono text-[9px]">{item.SessionID || item['Session ID'] || '-'}</span>
+                             </td>
+                           </tr>
+                         ))
+                     ) : (
+                       <tr>
+                         <td colSpan={5} className="px-5 py-32 text-center">
+                            <div className="flex flex-col items-center gap-4">
+                               <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center">
+                                  <Clock className="w-8 h-8 text-slate-200" />
+                               </div>
+                               <div className="space-y-1">
+                                 <p className="text-slate-300 font-black uppercase tracking-[0.3em] text-sm">ไม่มีรายการค้างในระบบ</p>
+                                 <p className="text-slate-400 text-[10px] font-bold uppercase">กำลังรอการทำรายการจากผู้ใช้งาน...</p>
+                               </div>
+                            </div>
+                         </td>
+                       </tr>
+                     )}
+                   </tbody>
+                 </table>
+               </div>
+            </div>
+          </div>
+        )}
+
       </main>
 
       <nav className="fixed bottom-7 left-1/2 -translate-x-1/2 w-[94%] max-w-md md:max-w-lg bg-white/95 backdrop-blur-2xl border border-white/50 p-3 rounded-[40px] shadow-2xl flex items-center justify-between z-50 print:hidden">
@@ -1551,9 +1678,14 @@ const App: React.FC = () => {
         <button onClick={() => setView('HISTORY')} className={`flex-1 flex flex-col items-center justify-center py-2.5 transition-all ${view === 'HISTORY' ? 'text-blue-600 scale-110' : 'text-slate-300 hover:text-slate-400'}`}>
           <HistoryIcon className="w-5.5 h-5.5" /><span className="text-[8px] font-black mt-1.5 uppercase tracking-widest">ประวัติ</span>
         </button>
-        <button onClick={() => setView('DASHBOARD')} className={`flex-1 flex flex-col items-center justify-center py-2.5 transition-all ${view === 'DASHBOARD' ? 'text-blue-600 scale-110' : 'text-slate-300 hover:text-slate-400'}`}>
+        <button onClick={() => setView('DASHBOARD')} className={`flex-1 flex flex-col items-center justify-center py-2.5 transition-all ${['DASHBOARD', 'ADMIN_PENDING'].includes(view) ? 'text-blue-600 scale-110' : 'text-slate-300 hover:text-slate-400'}`}>
           <LayoutDashboard className="w-5.5 h-5.5" /><span className="text-[8px] font-black mt-1.5 uppercase tracking-widest">รายงาน</span>
         </button>
+        {isLoggedIn && (
+          <button onClick={() => setView('ADMIN_PENDING')} className={`flex-1 flex flex-col items-center justify-center py-2.5 transition-all ${view === 'ADMIN_PENDING' ? 'text-blue-600 scale-110' : 'text-slate-300 hover:text-slate-400'}`}>
+            <ShieldAlert className="w-5.5 h-5.5" /><span className="text-[8px] font-black mt-1.5 uppercase tracking-widest">Monitor</span>
+          </button>
+        )}
       </nav>
 
       <style>{`

@@ -42,5 +42,5 @@ export interface IntakeRecord {
   source?: string;
 }
 
-export type ViewState = 'SCANNER' | 'PENDING_LIST' | 'HISTORY' | 'INTAKE' | 'TRANSFER' | 'DASHBOARD' | 'INVENTORY';
+export type ViewState = 'SCANNER' | 'PENDING_LIST' | 'HISTORY' | 'INTAKE' | 'TRANSFER' | 'DASHBOARD' | 'INVENTORY' | 'ADMIN_PENDING';
 export type DashboardPeriod = 'MONTH' | 'QUARTER' | 'YEAR';
